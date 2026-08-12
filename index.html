@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>App de Mapas Satélite Offline</title>
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <!-- Leaflet Control Search CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-search@2.9.8/dist/leaflet-search.min.css" />
+    <style>
+        body, html { margin: 0; padding: 0; height: 100%; width: 100%; overflow: hidden; font-family: Arial, sans-serif; }
+        #map { width: 100%; height: 100vh; }
+        
+        /* Botão Flutuante Estilo Lua (Arrastável e gruda nas bordas) */
+        #btn-flutuante {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            width: 60px;
+            height: 60px;
+            background-color: #28a745;
+            border-radius: 50%;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+            cursor: grab;
+            z-index: 2000;
+            touch-action: none;
+            user-select: none;
+        }
+
+        /* Menu de Ações do Botão Flutuante */
+        #menu-flutuante {
+            position: fixed;
+            bottom: 90px;
+            right: 20px;
+            background: white;
+            padding: 10px;
+            border-radius: 8px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+            display: none;
+            z-index: 2000;
+            flex-direction: column;
+            gap: 8px;
+        }
+        #menu-flutuante button {
+            padding: 8px 12px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            color: white;
+            text-align: left;
+        }
+        .btn-marcar { background-color: #007bff; }
+        .btn-pdf { background-color: #ffc107; color: black !important; }
+        .btn-lixeira { background-color: #dc3545; }
+
+        /* Estilo do Ponto Azul Reduzido pela Metade (10x10px) */
+        .user-location-marker {
+            background-color: #007bff;
+            border: 2px solid white;
+            border-radius: 50%;
+            box-shadow: 0 0 6px rgba(0,0,0,0.5);
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Botão Flutuante Principal -->
+    <div id="btn-flutuante">⚙️</div>
+
+    <!-- Menu que abre ao clicar no botão flutuante -->
+    <div id="menu-flutuante">
+        <button class="btn-marcar" onclick="adicionarPontoAtual()">📍 Marcar Ponto</button>
+        <button class="btn-pdf" onclick="document.getElementById('file-pdf').click()">📄 Importar PDF</button>
+        <button class="btn-lixeira" onclick="apagarTodasMarcacoes()">🗑️ Apagar Tudo</button>
+        <input type="file" id="file-pdf" accept="application/pdf" style="display: none;" onchange="importarPDF(event)">
+    </div>
+
+    <div id="map"></div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- Leaflet Control Search JS -->
+    <script src="https://unpkg.com/leaflet-search@2.9.8/dist/leaflet-search.min.js"></script>
+    <script>
+        // 1. Inicialização do Mapa
+        const map = L.map('map').setView([-15.7801, -47.9292], 15);
+
+        // Mapa Base Satélite (Esri World Imagery)
+        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            maxZoom: 19,
+            attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
+        }).addTo(map);
+
+        // 2. Geolocalização em Tempo Real com Bolinha Reduzida
+        let markerGPS = null;
+        let primeiroZoom = true;
+
+        if (navigator.geolocation) {
+            navigator.geolocation.watchPosition(
+                (position) => {
+                    const lat = position.coords.latitude;
+                    const lng = position.coords.longitude;
+
+                    if (!markerGPS) {
+                        const iconeAzul = L.divIcon({
+                            className: 'user-location-marker',
+                            iconSize: [10, 10],   // Reduzido para metade do tamanho anterior
+                            iconAnchor: [5, 5]
+                        });
+                        markerGPS = L.marker([lat, lng], { icon: iconeAzul }).addTo(map)
+                            .bindPopup("Você está aqui");
+                    } else {
+                        markerGPS.setLatLng([lat, lng]);
+                    }
+
+                    if (primeiroZoom) {
+                        map.setView([lat, lng], 17);
+                        primeiroZoom = false;
+                    }
+                },
+                (error) => {
+                    console.warn("Erro ao obter localização: ", error.message);
+                },
+                {
+                    enableHighAccuracy: true,
+                    maximumAge: 0,
+                    timeout: 10000
+                }
+            );
+        } else {
+            alert("Seu navegador não suporta geolocalização.");
+        }
+
+        // 3. Camada de Talhões (Exemplo)
+        const talhoesExemplo = {
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "geometry": {
+                        "type": "Polygon",
+                        "coordinates": [
+                            [
+                                [-47.935, -15.780],
+                                [-47.930, -15.780],
+                                [-47.930, -15.775],
+                                [-47.935, -15.775],
+                                [-47.935, -15.780]
+                            ]
+                        ]
+                    },
+                    "properties": { "nome": "Talhão 01" }
+                }
+            ]
+        };
+
+        const camadaTalhoes = L.geoJSON(talhoesExemplo, {
+            style: { color: "#ffcc00", weight: 2, fillOpacity: 0.2 },
+            onEachFeature: function (feature, layer) {
+                if (feature.properties && feature.properties.nome) {
+                    layer.bindPopup(feature.properties.nome);
+                }
+            }
+        }).addTo(map);
+
+        // 4. Barra de Pesquisa
+        const searchControl = new L.Control.Search({
+            layer: camadaTalhoes,
+            propertyName: 'nome',
+            marker: false,
+            moveToLocation: function(latlng, title, map) {
+                map.setView(latlng, 17);
+            }
+        });
+        map.addControl(searchControl);
+
+        // 5. Sistema de Persistência de Pontos Fixos
+        let marcadoresSalvos = JSON.parse(localStorage.getItem('meus_pontos')) || [];
+
+        function carregarPontosNaTela() {
+            marcadoresSalvos.forEach(coord => {
+                L.marker([coord.lat, coord.lng]).addTo(map)
+                  .bindPopup(`Ponto fixo salvo em: ${coord.data}`);
+            });
+        }
+        carregarPontosNaTela();
+
+        // 6. Controle do Botão e Menu Flutuante (Arrastar e Abrir Configurações)
+        const btnFlutuante = document.getElementById('btn-flutuante');
+        const menuFlutuante = document.getElementById('menu-flutuante');
+
+        function toggleMenu() {
+            if (menuFlutuante.style.display === 'flex') {
+                menuFlutuante.style.display = 'none';
+            } else {
+                menuFlutuante.style.display = 'flex';
+            }
+        }
+
+        function adicionarPontoAtual() {
+            let latlngParaMarcar = markerGPS ? markerGPS.getLatLng() : map.getCenter();
+            
+            const novoPonto = { lat: latlngParaMarcar.lat, lng: latlngParaMarcar.lng, data: new Date().toLocaleString() };
+            
+            marcadoresSalvos.push(novoPonto);
+            localStorage.setItem('meus_pontos', JSON.stringify(marcadoresSalvos));
+
+            L.marker([novoPonto.lat, novoPonto.lng]).addTo(map)
+              .bindPopup(`Ponto fixo salvo em: ${novoPonto.data}`)
+              .openPopup();
+
+            alert('Ponto fixo salvo com sucesso!');
+            toggleMenu();
+        }
+
+        function importarPDF(event) {
+            const arquivo = event.target.files[0];
+            if (arquivo) {
+                alert(`PDF "${arquivo.name}" selecionado!`);
+            }
+            toggleMenu();
+        }
+
+        function apagarTodasMarcacoes() {
+            if (confirm("Tem certeza que deseja apagar todas as marcações?")) {
+                localStorage.removeItem('meus_pontos');
+                marcadoresSalvos = [];
+                location.reload(); 
+            }
+        }
+
+        // Lógica unificada para Arrastar e Clicar no Botão Flutuante
+        let isDragging = false;
+        let startX, startY;
+
+        btnFlutuante.addEventListener('pointerdown', (e) => {
+            isDragging = false;
+            startX = e.clientX;
+            startY = e.clientY;
+        });
+
+        btnFlutuante.addEventListener('pointermove', (e) => {
+            if (Math.abs(e.clientX - startX) > 5 || Math.abs(e.clientY - startY) > 5) {
+                isDragging = true;
+            }
+            if (!isDragging) return;
+
+            let x = e.clientX - 30;
+            let y = e.clientY - 30;
+            const maxX = window.innerWidth - 60;
+            const maxY = window.innerHeight - 60;
+            x = Math.max(0, Math.min(x, maxX));
+            y = Math.max(0, Math.min(y, maxY));
+            
+            btnFlutuante.style.left = x + 'px';
+            btnFlutuante.style.top = y + 'px';
+            btnFlutuante.style.bottom = 'auto';
+            btnFlutuante.style.right = 'auto';
+            menuFlutuante.style.display = 'none';
+        });
+
+        btnFlutuante.addEventListener('pointerup', () => {
+            if (!isDragging) {
+                // Se não arrastou, funciona como clique normal para abrir/fechar o menu
+                toggleMenu();
+            } else {
+                // Grudar nas bordas ao soltar
+                isDragging = false;
+                const rect = btnFlutuante.getBoundingClientRect();
+                if (rect.left < window.innerWidth / 2) {
+                    btnFlutuante.style.left = '10px';
+                } else {
+                    btnFlutuante.style.left = (window.innerWidth - 70) + 'px';
+                }
+            }
+        });
+    </script>
+</body>
+</html>
